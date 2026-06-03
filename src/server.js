@@ -248,3 +248,27 @@ app.get('*', (req,res) => {
 });
 
 app.listen(PORT, () => console.log(`Holding Web rodando na porta ${PORT}`));
+
+// ── Participantes (adicionar ao projeto) ──────────────────────
+app.put('/api/projetos/:id/participantes', auth, async (req,res) => {
+  try {
+    const { pessoa_id, papel=0 } = req.body;
+    if (!pessoa_id) return res.status(400).json({erro:'pessoa_id obrigatório'});
+    await pool.query('INSERT INTO participantes (projeto_id,pessoa_id,papel) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+      [req.params.id, pessoa_id, papel]);
+    res.json({mensagem:'Participante adicionado'});
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+// ── Células update ─────────────────────────────────────────────
+app.put('/api/celulas/:id', auth, async (req,res) => {
+  try {
+    const campos=['status','nome_celula','razao_social','cnpj','nire','data_constituicao','data_registro','objeto_social','capital_social_previsto','capital_social_efetivo','total_quotas','valor_quota','administrador_id','regencia_supletiva','observacoes'];
+    const sets=[],vals=[];
+    for(const [k,v] of Object.entries(req.body)){if(campos.includes(k)){sets.push(`${k}=$${vals.length+1}`);vals.push(v);}}
+    if(!sets.length) return res.status(400).json({erro:'Nenhum campo'});
+    sets.push('updated_at=NOW()');vals.push(req.params.id);
+    const r=await pool.query(`UPDATE celulas SET ${sets.join(',')} WHERE id=$${vals.length} AND deleted_at IS NULL RETURNING *`,vals);
+    res.json(r.rows[0]);
+  } catch(e){res.status(500).json({erro:e.message});}
+});
