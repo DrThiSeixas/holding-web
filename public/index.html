@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1F4470" />
+  <meta name="description" content="Holding Web — Sistema jurídico para Holdings Familiares · Thiago Seixas Advocacia Societária" />
+  <title>Holding Web · Thiago Seixas</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800&family=Lato:wght@300;400;700&family=Oswald:wght@300;400&display=swap" rel="stylesheet" />
+
+  <!-- Tabler Icons CDN -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.0.0/tabler-icons.min.css" />
+
+  <!-- CSS do sistema -->
+  <link rel="stylesheet" href="/css/base.css" />
+  <link rel="stylesheet" href="/css/layout.css" />
+  <link rel="stylesheet" href="/css/components.css" />
+  <link rel="stylesheet" href="/css/print.css" media="print" />
+
+  <style>
+    /* Splash enquanto JS carrega */
+    #splash {
+      position: fixed; inset: 0;
+      background: #1F4470;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px;
+      z-index: 9999;
+      transition: opacity 0.3s;
+    }
+    #splash.hidden { opacity: 0; pointer-events: none; }
+    .splash-logo {
+      font-family: 'Montserrat', sans-serif;
+      font-weight: 800;
+      font-size: 36px;
+      color: white;
+      letter-spacing: -2px;
+    }
+    .splash-logo span { color: #94B6DF; }
+    .splash-sub {
+      font-family: 'Oswald', sans-serif;
+      font-weight: 300;
+      font-size: 11px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.4);
+    }
+    .splash-spinner {
+      width: 28px; height: 28px;
+      border: 3px solid rgba(255,255,255,0.15);
+      border-top-color: #94B6DF;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin-top: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <!-- Splash inicial -->
+  <div id="splash">
+    <div class="splash-logo">Holding<span>.</span>Web</div>
+    <div class="splash-sub">Thiago Seixas · Advocacia Societária</div>
+    <div class="splash-spinner"></div>
+  </div>
+
+  <!-- App montado pelo JS -->
+  <div id="app"></div>
+
+  <!-- Módulo principal -->
+  <script type="module">
+    import('/js/app.js').then(() => {
+      // Remover splash após init
+      setTimeout(() => {
+        const splash = document.getElementById('splash');
+        if (splash) {
+          splash.classList.add('hidden');
+          setTimeout(() => splash.remove(), 350);
+        }
+      }, 400);
+    }).catch(err => {
+      console.error('Erro ao iniciar:', err);
+      document.getElementById('splash').innerHTML = `
+        <div style="color:white;text-align:center;padding:40px;">
+          <div style="font-size:32px;margin-bottom:16px;">⚠️</div>
+          <div style="font-size:16px;font-weight:700;">Erro ao carregar o sistema</div>
+          <div style="font-size:13px;opacity:0.6;margin-top:8px;">${err.message}</div>
+          <button onclick="location.reload()" style="margin-top:24px;padding:10px 24px;
+            background:white;color:#1F4470;border:none;border-radius:8px;
+            font-weight:700;font-size:14px;cursor:pointer;">
+            Recarregar
+          </button>
+        </div>
+      `;
+    });
+  </script>
+</body>
+</html>

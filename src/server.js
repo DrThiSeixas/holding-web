@@ -1,0 +1,250 @@
+require('dotenv').config();
+const express = require('express');
+const cors    = require('cors');
+const path    = require('path');
+const { Pool } = require('pg');
+const bcrypt  = require('bcrypt');
+const jwt     = require('jsonwebtoken');
+
+const app  = express();
+const PORT = process.env.PORT || 3000;
+
+// Pool PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// ── Auth middleware ────────────────────────────────────────────
+function auth(req, res, next) {
+  const h = req.headers.authorization;
+  if (!h) return res.status(401).json({ erro: 'Token ausente' });
+  try {
+    req.user = jwt.verify(h.replace('Bearer ', ''), process.env.JWT_SECRET);
+    next();
+  } catch { res.status(401).json({ erro: 'Token inválido' }); }
+}
+
+// ── Health ────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', versao: '1.0.0' });
+});
+
+// ── Login ─────────────────────────────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, senha } = req.body;
+    if (!email || !senha) return res.status(400).json({ erro: 'E-mail e senha obrigatórios' });
+
+    const r = await pool.query('SELECT * FROM usuarios WHERE email=$1 AND ativo=true', [email.toLowerCase().trim()]);
+    if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
+
+    const u = r.rows[0];
+    const ok = await bcrypt.compare(senha, u.senha_hash);
+    if (!ok) return res.status(401).json({ erro: 'Credenciais inválidas' });
+
+    await pool.query('UPDATE usuarios SET ultimo_acesso=NOW() WHERE id=$1', [u.id]);
+
+    const token = jwt.sign(
+      { id: u.id, nome: u.nome, email: u.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.json({ token, usuario: { id: u.id, nome: u.nome, email: u.email, oab_numero: u.oab_numero } });
+  } catch (e) {
+    console.error('Login error:', e);
+    res.status(500).json({ erro: 'Erro interno' });
+  }
+});
+
+// ── Dashboard ─────────────────────────────────────────────────
+app.get('/api/dashboard', auth, async (req, res) => {
+  try {
+    const casos = await pool.query(`SELECT COUNT(*) FILTER (WHERE status NOT IN (5,6)) AS ativos, COUNT(*) AS total FROM projetos WHERE deleted_at IS NULL`);
+    const patrim = await pool.query(`SELECT COALESCE(SUM(patrimonio_estimado),0) AS total FROM projetos WHERE deleted_at IS NULL AND status NOT IN (5,6)`);
+    const recentes = await pool.query(`SELECT id, codigo, nome_familia, status, patrimonio_estimado FROM projetos WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 10`);
+    res.json({
+      metricas: {
+        casos_ativos: parseInt(casos.rows[0].ativos),
+        casos_total: parseInt(casos.rows[0].total),
+        patrimonio_total: parseFloat(patrim.rows[0].total),
+        honorarios_mes: 0, documentos_mes: 0, parcelas_vencendo: 0
+      },
+      casos_recentes: recentes.rows
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Clientes ──────────────────────────────────────────────────
+app.get('/api/clientes', auth, async (req, res) => {
+  try {
+    const { q = '', page = 1 } = req.query;
+    const offset = (parseInt(page)-1) * 20;
+    let sql = 'SELECT id,nome,cpf,celular,email,estado_civil,cidade,uf,ativo FROM pessoas_fisicas WHERE deleted_at IS NULL';
+    const params = [];
+    if (q) { params.push(`%${q}%`); sql += ` AND (nome ILIKE $1 OR cpf ILIKE $1)`; }
+    sql += ` ORDER BY nome LIMIT 20 OFFSET ${offset}`;
+    const r = await pool.query(sql, params);
+    const c = await pool.query(`SELECT COUNT(*) FROM pessoas_fisicas WHERE deleted_at IS NULL${q ? ` AND (nome ILIKE $1 OR cpf ILIKE $1)` : ''}`, q ? [`%${q}%`] : []);
+    res.json({ dados: r.rows, total: parseInt(c.rows[0].count), pagina: parseInt(page), limite: 20 });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/clientes/:id', auth, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM pessoas_fisicas WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Não encontrado' });
+    const projs = await pool.query(`SELECT proj.id,proj.codigo,proj.nome_familia,proj.status,pt.papel FROM participantes pt JOIN projetos proj ON proj.id=pt.projeto_id WHERE pt.pessoa_id=$1 AND pt.deleted_at IS NULL ORDER BY proj.created_at DESC`, [req.params.id]);
+    res.json({ ...r.rows[0], projetos: projs.rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/clientes', auth, async (req, res) => {
+  try {
+    const d = req.body;
+    if (!d.nome || !d.cpf) return res.status(400).json({ erro: 'Nome e CPF obrigatórios' });
+    const r = await pool.query(`INSERT INTO pessoas_fisicas (nome,cpf,rg,profissao,estado_civil,regime_bens,cep,logradouro,numero,complemento,bairro,cidade,uf,celular,email,whatsapp,observacoes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+      [d.nome,d.cpf,d.rg||null,d.profissao||null,d.estado_civil||0,d.regime_bens||null,d.cep||null,d.logradouro||null,d.numero||null,d.complemento||null,d.bairro||null,d.cidade||null,d.uf||null,d.celular||null,d.email||null,d.whatsapp||null,d.observacoes||null]);
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/clientes/:id', auth, async (req, res) => {
+  try {
+    const campos = ['nome','cpf','profissao','estado_civil','regime_bens','cep','logradouro','numero','complemento','bairro','cidade','uf','celular','email','whatsapp','observacoes'];
+    const sets = [], vals = [];
+    for (const [k,v] of Object.entries(req.body)) {
+      if (campos.includes(k)) { sets.push(`${k}=$${vals.length+1}`); vals.push(v); }
+    }
+    if (!sets.length) return res.status(400).json({ erro: 'Nenhum campo' });
+    sets.push('updated_at=NOW()'); vals.push(req.params.id);
+    const r = await pool.query(`UPDATE pessoas_fisicas SET ${sets.join(',')} WHERE id=$${vals.length} AND deleted_at IS NULL RETURNING *`, vals);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Projetos ──────────────────────────────────────────────────
+app.get('/api/projetos', auth, async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT p.id,p.codigo,p.nome_familia,p.nome_projeto,p.status,p.patrimonio_estimado,p.created_at,(SELECT COUNT(*) FROM celulas c WHERE c.projeto_id=p.id AND c.deleted_at IS NULL) AS total_celulas FROM projetos p WHERE p.deleted_at IS NULL ORDER BY p.updated_at DESC`);
+    res.json({ dados: r.rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/projetos/:id', auth, async (req, res) => {
+  try {
+    const p = await pool.query('SELECT * FROM projetos WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
+    if (!p.rows.length) return res.status(404).json({ erro: 'Não encontrado' });
+    const parts = await pool.query(`SELECT pt.*,pf.nome,pf.cpf,pf.celular FROM participantes pt JOIN pessoas_fisicas pf ON pf.id=pt.pessoa_id WHERE pt.projeto_id=$1 AND pt.deleted_at IS NULL`, [req.params.id]);
+    const cels = await pool.query('SELECT * FROM celulas WHERE projeto_id=$1 AND deleted_at IS NULL ORDER BY tipo', [req.params.id]);
+    const fases = await pool.query(`SELECT f.*,json_agg(pp ORDER BY pp.ordem) AS passos FROM fases_projeto f LEFT JOIN passos_fase pp ON pp.fase_id=f.id AND pp.deleted_at IS NULL WHERE f.projeto_id=$1 AND f.deleted_at IS NULL GROUP BY f.id ORDER BY f.numero_fase`, [req.params.id]);
+    res.json({ ...p.rows[0], participantes: parts.rows, celulas: cels.rows, fases: fases.rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/projetos', auth, async (req, res) => {
+  try {
+    const { nome_familia, nome_projeto, modelo_escolhido=2, patrimonio_estimado, pessoa_id } = req.body;
+    if (!nome_familia) return res.status(400).json({ erro: 'Nome da família obrigatório' });
+    const ano = new Date().getFullYear();
+    const seq = await pool.query(`SELECT COUNT(*)+1 AS n FROM projetos WHERE codigo LIKE $1`, [`PRJ-${ano}-%`]);
+    const codigo = `PRJ-${ano}-${String(seq.rows[0].n).padStart(3,'0')}`;
+    const r = await pool.query(`INSERT INTO projetos (codigo,nome_projeto,nome_familia,modelo_escolhido,patrimonio_estimado) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [codigo, nome_projeto||`Holding Família ${nome_familia}`, nome_familia, modelo_escolhido, patrimonio_estimado||null]);
+    const proj = r.rows[0];
+    if (pessoa_id) await pool.query('INSERT INTO participantes (projeto_id,pessoa_id,papel) VALUES ($1,$2,0)', [proj.id, pessoa_id]);
+    // Criar fases padrão
+    const fases = [
+      { n:1, nome:'Fase 1 — DESTINO', passos:['Elaborar Contrato Social da DESTINO','Assinatura pelos sócios','Registro na Junta Comercial','Obtenção do NIRE','Inscrição no CNPJ'] },
+      { n:2, nome:'Fase 2 — COFRE', passos:['Elaborar Contrato Social do COFRE','Integralização de bens','Nota Técnica ITBI','Registro na Junta Comercial','Inscrição no CNPJ'] },
+      { n:3, nome:'Fase 3 — VEÍCULO', passos:['Elaborar Contrato Social do VEÍCULO','Configurar Golden Share','Compra de quotas pela DESTINO','Registro na Junta Comercial','Acordo de Quotistas'] }
+    ];
+    for (const f of fases) {
+      const fR = await pool.query('INSERT INTO fases_projeto (projeto_id,numero_fase,nome_fase) VALUES ($1,$2,$3) RETURNING id', [proj.id,f.n,f.nome]);
+      for (let i=0;i<f.passos.length;i++) {
+        await pool.query('INSERT INTO passos_fase (fase_id,ordem,descricao) VALUES ($1,$2,$3)', [fR.rows[0].id,i+1,f.passos[i]]);
+      }
+    }
+    res.status(201).json(proj);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/projetos/:id', auth, async (req, res) => {
+  try {
+    const campos = ['nome_familia','nome_projeto','status','patrimonio_estimado','itcmd_estimado','observacoes'];
+    const sets=[],vals=[];
+    for (const [k,v] of Object.entries(req.body)) { if(campos.includes(k)){sets.push(`${k}=$${vals.length+1}`);vals.push(v);} }
+    if(!sets.length) return res.status(400).json({erro:'Nenhum campo'});
+    sets.push('updated_at=NOW()');vals.push(req.params.id);
+    const r = await pool.query(`UPDATE projetos SET ${sets.join(',')} WHERE id=$${vals.length} AND deleted_at IS NULL RETURNING *`,vals);
+    res.json(r.rows[0]);
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+// ── Células ───────────────────────────────────────────────────
+app.get('/api/celulas/projeto/:id', auth, async (req,res) => {
+  try {
+    const r = await pool.query('SELECT * FROM celulas WHERE projeto_id=$1 AND deleted_at IS NULL ORDER BY tipo',[req.params.id]);
+    res.json(r.rows);
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+app.post('/api/celulas', auth, async (req,res) => {
+  try {
+    const d=req.body;
+    if(!d.projeto_id||d.tipo===undefined||!d.nome_celula) return res.status(400).json({erro:'Campos obrigatórios ausentes'});
+    const r = await pool.query(`INSERT INTO celulas (projeto_id,tipo,nome_celula,objeto_social,capital_social_previsto,total_quotas,valor_quota,administrador_id,regencia_supletiva,observacoes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [d.projeto_id,d.tipo,d.nome_celula,d.objeto_social||null,d.capital_social_previsto||0,d.total_quotas||null,d.valor_quota||null,d.administrador_id||null,d.regencia_supletiva||false,d.observacoes||null]);
+    res.status(201).json(r.rows[0]);
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+// ── Bens ──────────────────────────────────────────────────────
+app.get('/api/bens/projeto/:id', auth, async (req,res) => {
+  try {
+    const r = await pool.query(`SELECT b.*,pf.nome AS nome_proprietario FROM bens b JOIN pessoas_fisicas pf ON pf.id=b.proprietario_id WHERE b.projeto_id=$1 AND b.deleted_at IS NULL ORDER BY b.tipo,b.valor_mercado DESC`,[req.params.id]);
+    const total = r.rows.reduce((s,b)=>s+parseFloat(b.valor_mercado||0),0);
+    res.json({dados:r.rows,totais:{total}});
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+app.post('/api/bens', auth, async (req,res) => {
+  try {
+    const d=req.body;
+    const r = await pool.query(`INSERT INTO bens (projeto_id,proprietario_id,tipo,descricao,valor_mercado,valor_aquisicao,valor_declarado_ir,valor_integralizacao,observacoes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [d.projeto_id,d.proprietario_id,d.tipo,d.descricao,d.valor_mercado||0,d.valor_aquisicao||0,d.valor_declarado_ir||0,d.valor_integralizacao||0,d.observacoes||null]);
+    res.status(201).json(r.rows[0]);
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+// ── CEP ───────────────────────────────────────────────────────
+app.get('/api/cep/:cep', async (req,res) => {
+  try {
+    const cep=req.params.cep.replace(/\D/g,'');
+    const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+    const d = await r.json();
+    if(d.erro) return res.status(404).json({erro:'CEP não encontrado'});
+    res.json(d);
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+// ── Passos da fase ────────────────────────────────────────────
+app.put('/api/passos/:id', auth, async (req,res) => {
+  try {
+    const {status} = req.body;
+    const r = await pool.query(`UPDATE passos_fase SET status=$1,data_conclusao=${status==='Concluída'?'NOW()':'NULL'},updated_at=NOW() WHERE id=$2 RETURNING *`,[status,req.params.id]);
+    res.json(r.rows[0]);
+  } catch(e){res.status(500).json({erro:e.message});}
+});
+
+// ── SPA fallback ──────────────────────────────────────────────
+app.get('*', (req,res) => {
+  res.sendFile(path.join(__dirname,'..','public','index.html'));
+});
+
+app.listen(PORT, () => console.log(`Holding Web rodando na porta ${PORT}`));
