@@ -296,3 +296,30 @@ app.get('/api/cep/:cep', async (req, res) => {
 app.get('*', (req, res) => res.sendFile(path.join(__dirname,'..','public','index.html')));
 
 app.listen(PORT, () => console.log(`Holding Web v1.0 rodando na porta ${PORT}`));
+
+// ── Delete Projeto (soft delete) ──────────────────────────────
+app.delete('/api/projetos/:id', auth, async (req, res) => {
+  try {
+    // Soft delete em cascata
+    const proj = await pool.query('SELECT id FROM projetos WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
+    if (!proj.rows.length) return res.status(404).json({ erro: 'Projeto não encontrado' });
+    
+    await pool.query('UPDATE passos_fase SET deleted_at=NOW() WHERE fase_id IN (SELECT id FROM fases_projeto WHERE projeto_id=$1)', [req.params.id]);
+    await pool.query('UPDATE fases_projeto SET deleted_at=NOW() WHERE projeto_id=$1', [req.params.id]);
+    await pool.query('UPDATE celulas SET deleted_at=NOW() WHERE projeto_id=$1', [req.params.id]);
+    await pool.query('UPDATE participantes SET deleted_at=NOW() WHERE projeto_id=$1', [req.params.id]);
+    await pool.query('UPDATE bens SET deleted_at=NOW() WHERE projeto_id=$1', [req.params.id]);
+    await pool.query('UPDATE projetos SET deleted_at=NOW() WHERE id=$1', [req.params.id]);
+    
+    res.json({ mensagem: 'Projeto excluído com sucesso' });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Delete Célula (soft delete) ───────────────────────────────
+app.delete('/api/celulas/:id', auth, async (req, res) => {
+  try {
+    const r = await pool.query('UPDATE celulas SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL RETURNING id', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Célula não encontrada' });
+    res.json({ mensagem: 'Célula excluída' });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});

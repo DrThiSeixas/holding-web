@@ -26,33 +26,35 @@ export const api = {
   put:    (path, body)  => request('PUT',    path, body),
   delete: (path)        => request('DELETE', path),
 
-  login: (email, senha) => request('POST', '/auth/login', { email, senha }),
-  dashboard: () => request('GET', '/dashboard'),
+  login:     (email, senha) => request('POST', '/auth/login', { email, senha }),
+  dashboard: ()             => request('GET', '/dashboard'),
 
   clientes: {
-    listar:   (q='', page=1) => request('GET', `/clientes?q=${encodeURIComponent(q)}&page=${page}`),
-    buscar:   (id)           => request('GET', `/clientes/${id}`),
-    criar:    (dados)        => request('POST', '/clientes', dados),
-    atualizar:(id, dados)    => request('PUT', `/clientes/${id}`, dados),
+    listar:    (q='', page=1) => request('GET', `/clientes?q=${encodeURIComponent(q)}&page=${page}`),
+    buscar:    (id)           => request('GET', `/clientes/${id}`),
+    criar:     (dados)        => request('POST', '/clientes', dados),
+    atualizar: (id, dados)    => request('PUT', `/clientes/${id}`, dados),
   },
 
   projetos: {
-    listar:   ()           => request('GET', '/projetos'),
-    buscar:   (id)         => request('GET', `/projetos/${id}`),
-    criar:    (dados)      => request('POST', '/projetos', dados),
-    atualizar:(id, dados)  => request('PUT', `/projetos/${id}`, dados),
+    listar:    ()          => request('GET', '/projetos'),
+    buscar:    (id)        => request('GET', `/projetos/${id}`),
+    criar:     (dados)     => request('POST', '/projetos', dados),
+    atualizar: (id, dados) => request('PUT', `/projetos/${id}`, dados),
+    excluir:   (id)        => request('DELETE', `/projetos/${id}`),
   },
 
   celulas: {
     listarPorProjeto: (pid) => request('GET', `/celulas/projeto/${pid}`),
-    criar:  (dados)         => request('POST', '/celulas', dados),
-    atualizar:(id, dados)   => request('PUT', `/celulas/${id}`, dados),
+    criar:     (dados)      => request('POST', '/celulas', dados),
+    atualizar: (id, dados)  => request('PUT', `/celulas/${id}`, dados),
+    excluir:   (id)         => request('DELETE', `/celulas/${id}`),
   },
 
   bens: {
     listarPorProjeto: (pid) => request('GET', `/bens/projeto/${pid}`),
-    criar:  (dados)         => request('POST', '/bens', dados),
-    atualizar:(id, dados)   => request('PUT', `/bens/${id}`, dados),
+    criar:     (dados)      => request('POST', '/bens', dados),
+    atualizar: (id, dados)  => request('PUT', `/bens/${id}`, dados),
   },
 
   cep: (cep) => request('GET', `/cep/${cep.replace(/\D/g,'')}`),

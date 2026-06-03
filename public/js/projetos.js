@@ -7,17 +7,36 @@ export function registrar() {
   registrarRota('#/projetos/:id',  renderDetalhe);
 }
 
+// ── CONFIRMAÇÃO DE EXCLUSÃO ───────────────────────────────────
+function confirmarExclusao(msg, onConfirm) {
+  abrirModal('⚠️ Confirmar Exclusão',
+    `<div style="text-align:center;padding:8px 0;">
+       <div style="font-size:48px;margin-bottom:12px;">🗑️</div>
+       <p style="font-size:14px;color:#333;line-height:1.6;">${msg}</p>
+       <p style="font-size:12px;color:#c62828;margin-top:12px;font-weight:700;background:#ffebee;padding:8px 12px;border-radius:8px;">
+         ⚠️ Esta ação não pode ser desfeita.
+       </p>
+     </div>`,
+    onConfirm, '🗑️ Sim, Excluir'
+  );
+  setTimeout(() => {
+    const btn = document.querySelector('#modal-global .btn-confirm');
+    if (btn) { btn.style.background='#c62828'; btn.style.border='none'; }
+  }, 50);
+}
+
 // ── LISTA ─────────────────────────────────────────────────────
 async function renderLista(params, main) {
   setTopbar('Projetos', '', `<button class="btn btn-primary btn-sm" onclick="location.hash='#/projetos/novo'">+ Novo Projeto</button>`);
   const data = await api.projetos.listar();
+
   main.innerHTML = `
     <div class="card">
       <div class="card-header">
         <span class="card-header-title">Todos os Projetos</span>
         <span style="font-size:12px;color:#8B9FB4;">${data.dados?.length||0} casos</span>
       </div>
-      <div>
+      <div id="lista-projetos">
         ${!data.dados?.length
           ? `<div class="empty-state">
                <p class="empty-title">Nenhum projeto cadastrado</p>
@@ -25,17 +44,45 @@ async function renderLista(params, main) {
              </div>`
           : data.dados.map(p => {
               const ini = (p.nome_familia||'??').split(' ').map(w=>w[0]).join('').substring(0,2).toUpperCase();
-              return `<div class="list-row" onclick="location.hash='#/projetos/${p.id}'" role="button" tabindex="0">
-                <div class="avatar">${ini}</div>
-                <div class="item-info">
-                  <div class="item-name">Família ${p.nome_familia}</div>
-                  <div class="item-sub">${p.codigo} · ${p.patrimonio_estimado ? fmt(p.patrimonio_estimado) : '—'} · ${p.total_celulas||0} célula(s)</div>
-                </div>
-                <span class="badge badge-${p.status}">${STATUS_PROJ[p.status]||'—'}</span>
-              </div>`;
+              return `
+                <div class="list-row" style="gap:0;">
+                  <div style="display:flex;align-items:center;gap:12px;flex:1;cursor:pointer;padding-right:8px;"
+                    onclick="location.hash='#/projetos/${p.id}'">
+                    <div class="avatar">${ini}</div>
+                    <div class="item-info">
+                      <div class="item-name">Família ${p.nome_familia}</div>
+                      <div class="item-sub">${p.codigo} · ${p.patrimonio_estimado ? fmt(p.patrimonio_estimado) : '—'} · ${p.total_celulas||0} célula(s)</div>
+                    </div>
+                    <span class="badge badge-${p.status}" style="margin-right:8px;">${STATUS_PROJ[p.status]||'—'}</span>
+                  </div>
+                  <button class="btn-del" data-id="${p.id}" data-nome="${p.nome_familia}"
+                    title="Excluir projeto"
+                    style="width:36px;height:36px;border-radius:8px;border:1px solid #ffcdd2;
+                      background:white;color:#c62828;font-size:16px;cursor:pointer;flex-shrink:0;
+                      display:flex;align-items:center;justify-content:center;">
+                    🗑️
+                  </button>
+                </div>`;
             }).join('')}
       </div>
     </div>`;
+
+  main.querySelectorAll('.btn-del').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      confirmarExclusao(
+        `Excluir o projeto da <strong>Família ${btn.dataset.nome}</strong>?<br><br>Todos os dados serão removidos: células, passos, evidências e participantes.`,
+        async () => {
+          try {
+            await api.projetos.excluir(btn.dataset.id);
+            toast('Projeto excluído!', 'success');
+            fecharModal();
+            renderLista(params, main);
+          } catch (err) { toast(err.message, 'error'); }
+        }
+      );
+    });
+  });
 }
 
 // ── DETALHE ───────────────────────────────────────────────────
@@ -44,7 +91,8 @@ async function renderDetalhe(params, main) {
   const proj = await api.projetos.buscar(id);
 
   setTopbar(`Família ${proj.nome_familia}`, `Projetos · ${proj.codigo}`,
-    `<button class="btn btn-secondary btn-sm" onclick="window._editarStatus()">Atualizar Status</button>
+    `<button class="btn btn-ghost btn-sm" onclick="window._excluirProjeto()" style="color:#c62828;border-color:#ffcdd2;">🗑️ Excluir</button>
+     <button class="btn btn-secondary btn-sm" onclick="window._editarStatus()">Atualizar Status</button>
      <button class="btn btn-primary btn-sm" onclick="window._novaCelula()">+ Célula</button>`);
 
   main.innerHTML = `
@@ -74,7 +122,7 @@ async function renderDetalhe(params, main) {
         <span class="card-header-title">Tríade — Modelo de 3 Células</span>
         <button class="btn btn-primary btn-sm" onclick="window._novaCelula()">+ Nova Célula</button>
       </div>
-      <div style="padding:16px;">${renderTriade(proj.celulas, id)}</div>
+      <div style="padding:16px;" id="triade-wrap">${renderTriade(proj.celulas, id)}</div>
     </div>
 
     <div class="card">
@@ -103,11 +151,12 @@ async function renderDetalhe(params, main) {
     });
   });
 
-  // Expandir fase com passos pendentes automaticamente
-  main.querySelectorAll('.accordion-item').forEach(item => {
-    const pendentes = item.querySelectorAll('.passo-btn:not(.passo-concluido)').length;
-    if (pendentes > 0) { item.classList.add('open'); return false; }
-  });
+  // Abrir primeira fase com pendências
+  const fases = main.querySelectorAll('.accordion-item');
+  for (const item of fases) {
+    const pendentes = item.querySelectorAll('.passo-btn:not([data-concluido])').length;
+    if (pendentes > 0) { item.classList.add('open'); break; }
+  }
 
   // Botão de concluir passo
   main.querySelectorAll('.passo-btn').forEach(btn => {
@@ -117,7 +166,39 @@ async function renderDetalhe(params, main) {
     });
   });
 
+  // Excluir célula
+  main.querySelectorAll('.btn-del-celula').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      confirmarExclusao(
+        `Excluir a célula <strong>${btn.dataset.nome}</strong>?`,
+        async () => {
+          try {
+            await api.celulas.excluir(btn.dataset.id);
+            toast('Célula excluída!', 'success');
+            fecharModal();
+            renderDetalhe(params, main);
+          } catch (err) { toast(err.message, 'error'); }
+        }
+      );
+    });
+  });
+
   // Globals
+  window._excluirProjeto = () => {
+    confirmarExclusao(
+      `Excluir o projeto da <strong>Família ${proj.nome_familia}</strong> (${proj.codigo})?<br><br>Todos os dados serão removidos permanentemente.`,
+      async () => {
+        try {
+          await api.projetos.excluir(id);
+          toast('Projeto excluído!', 'success');
+          fecharModal();
+          location.hash = '#/projetos';
+        } catch (err) { toast(err.message, 'error'); }
+      }
+    );
+  };
+
   window._editarStatus = () => {
     abrirModal('Atualizar Status', `
       <div class="form-group">
@@ -195,8 +276,6 @@ async function renderDetalhe(params, main) {
 function abrirModalEvidencia(passo, projetoId, onSuccess) {
   const jaConcluido = passo.status === 'Concluída';
   const evidencia = passo.evidencia || {};
-
-  // Montar campos do formulário de evidência
   const camposHtml = (passo.campos_evidencia || []).map(c => {
     const val = evidencia[c.nome] || '';
     if (c.tipo === 'select') {
@@ -220,166 +299,149 @@ function abrirModalEvidencia(passo, projetoId, onSuccess) {
   const temCampos = (passo.campos_evidencia || []).length > 0;
 
   abrirModal(
-    jaConcluido ? `✅ ${passo.descricao.substring(0,50)}...` : passo.descricao.substring(0,60) + '...',
-    `<div style="margin-bottom:16px;">
-       <p style="font-size:13px;color:#333;line-height:1.6;background:#f5f6f8;padding:12px 14px;border-radius:8px;">
-         ${passo.descricao}
-       </p>
+    jaConcluido ? '✅ Editar Comprovação' : '📋 Concluir Passo',
+    `<div style="background:#f5f6f8;padding:12px 14px;border-radius:8px;margin-bottom:16px;">
+       <p style="font-size:13px;color:#333;line-height:1.6;margin:0;">${passo.descricao}</p>
      </div>
-     ${passo.instrucao ? `<div style="font-size:12px;color:#1565C0;background:#f0f4fb;padding:10px 14px;border-radius:8px;margin-bottom:16px;border-left:3px solid #1565C0;">
-       💡 ${passo.instrucao}
+     ${passo.instrucao ? `<div style="font-size:12px;color:#1565C0;background:#f0f4fb;padding:10px 14px;
+       border-radius:8px;margin-bottom:16px;border-left:3px solid #1565C0;">
+       💡 <strong>O que informar:</strong> ${passo.instrucao}
      </div>` : ''}
-     ${temCampos ? `<form id="form-evidencia" style="display:flex;flex-direction:column;gap:14px;">
+     ${temCampos ? `<form id="form-evidencia" style="display:flex;flex-direction:column;gap:12px;">
        ${camposHtml}
-     </form>` : `<p style="font-size:13px;color:#8B9FB4;text-align:center;padding:16px;">
-       Confirme que este passo foi concluído para continuar.</p>`}
-     ${jaConcluido ? `<div style="margin-top:12px;padding:10px 14px;background:#e8f5e9;border-radius:8px;font-size:12px;color:#2E7D32;font-weight:700;">
-       ✅ Passo concluído — você pode atualizar os dados ou reabrir.
+     </form>` : `<div style="text-align:center;padding:20px;color:#8B9FB4;">
+       <div style="font-size:32px;margin-bottom:8px;">✅</div>
+       <p style="font-size:13px;">Confirme que este passo foi concluído.</p>
+     </div>`}
+     ${jaConcluido ? `<div style="margin-top:12px;padding:10px;background:#e8f5e9;border-radius:8px;font-size:12px;color:#2E7D32;font-weight:700;text-align:center;">
+       ✅ Passo já concluído — você pode atualizar os dados acima.
      </div>` : ''}`,
     async (body) => {
       const campos_json = {};
       if (temCampos) {
         const form = body.querySelector('#form-evidencia');
-        const fd = new FormData(form);
-        for (const [k,v] of fd.entries()) if (v) campos_json[k] = v;
+        if (form) {
+          for (const [k,v] of new FormData(form).entries()) {
+            if (v) campos_json[k] = v;
+          }
+        }
       }
       try {
         await api.put(`/passos/${passo.id}`, { status: 'Concluída', campos_json });
-        toast('✅ Passo concluído!', 'success');
+        toast('✅ Passo concluído e salvo!', 'success');
         fecharModal();
         onSuccess();
       } catch (err) { toast(err.message, 'error'); }
     },
-    jaConcluido ? '💾 Atualizar' : '✅ Marcar como Concluído'
+    jaConcluido ? '💾 Atualizar' : '✅ Concluir Passo'
   );
 
   aplicarMascaras(document.getElementById('modal-global'));
 
-  // Botão de reabrir se já concluído
+  // Botão reabrir passo
   if (jaConcluido) {
-    const footer = document.querySelector('#modal-global .modal-footer');
-    if (footer) {
-      const btnReabrir = document.createElement('button');
-      btnReabrir.className = 'btn btn-ghost btn-sm';
-      btnReabrir.textContent = '↩️ Reabrir Passo';
-      btnReabrir.onclick = async () => {
+    setTimeout(() => {
+      const footer = document.querySelector('#modal-global .modal-footer');
+      if (!footer) return;
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-ghost btn-sm';
+      btn.style.color = '#c62828';
+      btn.textContent = '↩️ Reabrir';
+      btn.onclick = async () => {
         try {
           await api.put(`/passos/${passo.id}`, { status: 'Pendente', campos_json: {} });
           toast('Passo reaberto', 'default'); fecharModal(); onSuccess();
         } catch (err) { toast(err.message, 'error'); }
       };
-      footer.insertBefore(btnReabrir, footer.firstChild);
-    }
+      footer.insertBefore(btn, footer.firstChild);
+    }, 50);
   }
 }
 
 // ── TIMELINE ──────────────────────────────────────────────────
 function calcProgresso(fases = []) {
   let total = 0, feitos = 0;
-  fases.forEach(f => {
-    (f.passos||[]).filter(Boolean).forEach(p => {
-      total++;
-      if (p.status === 'Concluída') feitos++;
-    });
-  });
+  fases.forEach(f => (f.passos||[]).filter(Boolean).forEach(p => { total++; if(p.status==='Concluída') feitos++; }));
   return total ? Math.round((feitos/total)*100) : 0;
 }
 
 function renderTimeline(fases = []) {
   if (!fases.length) return `<p style="color:#8B9FB4;font-size:13px;padding:16px;">Fases não encontradas.</p>`;
-
-  const config = [
-    { cor: '#2E7D32', bg: '#f0f7f0', label: 'FASE 1', fase_label: 'Planejamento Sucessório' },
-    { cor: '#1565C0', bg: '#f0f4fb', label: 'FASE 2', fase_label: 'Planejamento Patrimonial' },
-    { cor: '#6A1B9A', bg: '#f5f0fa', label: 'FASE 3', fase_label: 'Planejamento Tributário' },
+  const cfg = [
+    { cor:'#2E7D32', bg:'#f0f7f0', label:'F1', titulo:'Planejamento Sucessório' },
+    { cor:'#1565C0', bg:'#f0f4fb', label:'F2', titulo:'Planejamento Patrimonial' },
+    { cor:'#6A1B9A', bg:'#f5f0fa', label:'F3', titulo:'Planejamento Tributário' },
   ];
 
   return fases.map((fase, idx) => {
-    const cfg    = config[idx] || config[0];
+    const c = cfg[idx] || cfg[0];
     const passos = (fase.passos||[]).filter(Boolean);
-    const feitos = passos.filter(p => p.status === 'Concluída').length;
-    const pct    = passos.length ? Math.round((feitos/passos.length)*100) : 0;
+    const feitos = passos.filter(p=>p.status==='Concluída').length;
+    const pct = passos.length ? Math.round((feitos/passos.length)*100) : 0;
 
     return `
-      <div class="accordion-item" style="border:1.5px solid ${pct===100?cfg.cor:'rgba(0,0,0,0.08)'};border-radius:12px;margin:0 16px 12px;overflow:hidden;background:${pct===100?cfg.bg:'white'};">
-        <div class="accordion-header" style="padding:16px 20px;cursor:pointer;background:${cfg.bg};">
+      <div class="accordion-item" style="border:1.5px solid ${pct===100?c.cor:'rgba(0,0,0,0.08)'};
+        border-radius:12px;margin:0 16px 12px;overflow:hidden;">
+        <div class="accordion-header" style="padding:14px 20px;cursor:pointer;background:${c.bg};">
           <div style="display:flex;align-items:center;gap:14px;">
-            <div style="width:44px;height:44px;border-radius:50%;border:3px solid ${cfg.cor};
-              background:${pct===100?cfg.cor:'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <div style="width:40px;height:40px;border-radius:50%;border:3px solid ${c.cor};
+              background:${pct===100?c.cor:'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
               ${pct===100
-                ? `<svg viewBox="0 0 24 24" width="20" height="20" stroke="white" fill="none" stroke-width="3"><polyline points="20 6 9 13 4 10"/></svg>`
-                : `<span style="font-size:10px;font-weight:800;color:${cfg.cor};letter-spacing:-0.5px;">${cfg.label}</span>`}
+                ? `<svg viewBox="0 0 24 24" width="18" height="18" stroke="white" fill="none" stroke-width="3"><polyline points="20 6 9 13 4 10"/></svg>`
+                : `<span style="font-size:11px;font-weight:800;color:${c.cor};">${c.label}</span>`}
             </div>
             <div>
-              <div style="font-family:'Montserrat',sans-serif;font-weight:700;font-size:14px;color:#1F4470;">${fase.nome_fase}</div>
-              <div style="font-size:11px;color:#8B9FB4;margin-top:2px;">${feitos} de ${passos.length} passos · ${cfg.fase_label}</div>
+              <div style="font-family:'Montserrat',sans-serif;font-weight:700;font-size:13px;color:#1F4470;">${fase.nome_fase}</div>
+              <div style="font-size:11px;color:#8B9FB4;">${feitos}/${passos.length} passos · ${c.titulo}</div>
             </div>
           </div>
-          <div style="display:flex;align-items:center;gap:14px;">
-            <div style="text-align:right;">
-              <div style="font-family:'Montserrat',sans-serif;font-weight:800;font-size:20px;color:${cfg.cor};">${pct}%</div>
-              <div style="width:80px;height:4px;background:rgba(0,0,0,0.08);border-radius:2px;overflow:hidden;margin-top:4px;">
-                <div style="height:100%;width:${pct}%;background:${cfg.cor};border-radius:2px;transition:width 0.3s;"></div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div>
+              <div style="font-family:'Montserrat',sans-serif;font-weight:800;font-size:22px;color:${c.cor};">${pct}%</div>
+              <div style="width:80px;height:4px;background:rgba(0,0,0,0.08);border-radius:2px;overflow:hidden;">
+                <div style="height:100%;width:${pct}%;background:${c.cor};border-radius:2px;"></div>
               </div>
             </div>
-            <span style="font-size:20px;color:${cfg.cor};transition:transform 0.2s;" class="accordion-toggle">▾</span>
+            <span class="accordion-toggle" style="font-size:20px;color:${c.cor};">▾</span>
           </div>
         </div>
         <div class="accordion-body" style="padding:0;">
           ${passos.map((passo, pi) => {
-            const concluido = passo.status === 'Concluída';
+            const ok = passo.status === 'Concluída';
             const ev = passo.evidencia || {};
-            const temEvidencia = Object.keys(ev).length > 0;
-
+            const temEv = Object.keys(ev).filter(k=>ev[k]).length > 0;
             return `
-              <div style="display:flex;align-items:flex-start;gap:14px;padding:14px 20px;
-                border-top:0.5px solid rgba(0,0,0,0.06);
-                background:${concluido?'rgba(0,0,0,0.015)':'white'};">
-
-                <!-- Número / check -->
-                <div style="width:28px;height:28px;border-radius:50%;border:2px solid ${concluido?cfg.cor:'#ddd'};
-                  background:${concluido?cfg.cor:'white'};display:flex;align-items:center;justify-content:center;
-                  flex-shrink:0;margin-top:2px;font-size:11px;font-weight:700;color:${concluido?'white':cfg.cor};">
-                  ${concluido
-                    ? `<svg viewBox="0 0 24 24" width="14" height="14" stroke="white" fill="none" stroke-width="3"><polyline points="20 6 9 13 4 10"/></svg>`
-                    : pi+1}
+              <div style="display:flex;align-items:flex-start;gap:12px;padding:14px 20px;
+                border-top:0.5px solid rgba(0,0,0,0.05);background:${ok?'rgba(0,0,0,0.01)':'white'};">
+                <div style="width:26px;height:26px;border-radius:50%;border:2px solid ${ok?c.cor:'#ddd'};
+                  background:${ok?c.cor:'white'};display:flex;align-items:center;justify-content:center;
+                  flex-shrink:0;margin-top:2px;font-size:11px;font-weight:700;color:${ok?'white':c.cor};">
+                  ${ok ? `<svg viewBox="0 0 24 24" width="13" height="13" stroke="white" fill="none" stroke-width="3"><polyline points="20 6 9 13 4 10"/></svg>` : pi+1}
                 </div>
-
-                <!-- Conteúdo -->
                 <div style="flex:1;min-width:0;">
-                  <div style="font-size:13px;color:${concluido?'#8B9FB4':'#222'};line-height:1.5;
-                    text-decoration:${concluido?'none':'none'};">
-                    ${passo.descricao}
-                  </div>
-
-                  <!-- Evidências registradas -->
-                  ${temEvidencia ? `
-                    <div style="margin-top:8px;padding:8px 12px;background:${cfg.bg};border-radius:8px;
-                      border-left:3px solid ${cfg.cor};">
-                      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                        color:${cfg.cor};margin-bottom:6px;">📎 Comprovação Registrada</div>
-                      ${Object.entries(ev).map(([k,v]) => v ? `
+                  <div style="font-size:13px;color:${ok?'#8B9FB4':'#222'};line-height:1.5;">${passo.descricao}</div>
+                  ${temEv ? `
+                    <div style="margin-top:8px;padding:8px 12px;background:${c.bg};border-radius:8px;border-left:3px solid ${c.cor};">
+                      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${c.cor};margin-bottom:4px;">📎 Comprovação</div>
+                      ${Object.entries(ev).filter(([,v])=>v).map(([k,v])=>`
                         <div style="font-size:12px;color:#333;margin-bottom:2px;">
-                          <span style="color:#8B9FB4;text-transform:capitalize;">${k.replace(/_/g,' ')}:</span>
-                          <strong>${v}</strong>
-                        </div>` : '').join('')}
+                          <span style="color:#8B9FB4;">${k.replace(/_/g,' ')}:</span> <strong>${v}</strong>
+                        </div>`).join('')}
                     </div>` : ''}
-
-                  ${passo.data_conclusao ? `
-                    <div style="font-size:11px;color:#8B9FB4;margin-top:6px;">
-                      ✅ Concluído em ${new Date(passo.data_conclusao).toLocaleDateString('pt-BR')}
-                    </div>` : ''}
+                  ${passo.data_conclusao ? `<div style="font-size:11px;color:#8B9FB4;margin-top:4px;">
+                    Concluído em ${new Date(passo.data_conclusao).toLocaleDateString('pt-BR')}
+                  </div>` : ''}
                 </div>
-
-                <!-- Botão de ação -->
-                <button class="passo-btn ${concluido?'passo-concluido':''}"
-                  data-passo='${JSON.stringify({...passo, campos_evidencia: passo.campos_evidencia||[]}).replace(/'/g,"&#39;")}'
-                  style="flex-shrink:0;padding:6px 14px;border-radius:20px;font-size:11px;font-weight:700;
-                    border:1.5px solid ${concluido?cfg.cor:'#ddd'};
-                    background:${concluido?cfg.cor:'white'};
-                    color:${concluido?'white':cfg.cor};
-                    cursor:pointer;white-space:nowrap;min-height:32px;">
-                  ${concluido ? '✅ Ver / Editar' : '→ Concluir'}
+                <button class="passo-btn" ${ok?'data-concluido':''}
+                  data-passo='${JSON.stringify({
+                    id: passo.id, descricao: passo.descricao, status: passo.status,
+                    instrucao: passo.instrucao||'', campos_evidencia: passo.campos_evidencia||[],
+                    evidencia: ev, data_conclusao: passo.data_conclusao
+                  }).replace(/'/g,"&#39;").replace(/"/g,"&quot;")}'
+                  style="flex-shrink:0;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;
+                    border:1.5px solid ${ok?c.cor:'#ddd'};background:${ok?c.cor:'white'};
+                    color:${ok?'white':c.cor};cursor:pointer;white-space:nowrap;min-height:30px;min-width:90px;">
+                  ${ok ? '✅ Ver/Editar' : '→ Concluir'}
                 </button>
               </div>`;
           }).join('')}
@@ -391,24 +453,29 @@ function renderTimeline(fases = []) {
 // ── TRÍADE ────────────────────────────────────────────────────
 function renderTriade(celulas = [], projetoId) {
   const tipos = [
-    { tipo: 1, label: 'DESTINO',  cls: 'celula-card-destino', cor: '#2E7D32', desc: 'Transmissão patrimonial e sucessão' },
-    { tipo: 0, label: 'COFRE',    cls: 'celula-card-cofre',   cor: '#1565C0', desc: 'Proteção e blindagem patrimonial' },
-    { tipo: 2, label: 'VEÍCULO',  cls: 'celula-card-veiculo',  cor: '#6A1B9A', desc: 'Controle operacional e Golden Share' },
+    { tipo:1, label:'DESTINO',  cls:'celula-card-destino', cor:'#2E7D32', desc:'Transmissão e Sucessão' },
+    { tipo:0, label:'COFRE',    cls:'celula-card-cofre',   cor:'#1565C0', desc:'Proteção Patrimonial' },
+    { tipo:2, label:'VEÍCULO',  cls:'celula-card-veiculo',  cor:'#6A1B9A', desc:'Controle e Golden Share' },
   ];
   return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
     ${tipos.map(t => {
-      const c = celulas.find(x => x.tipo === t.tipo);
+      const c = celulas.find(x=>x.tipo===t.tipo);
       if (!c) return `
         <div class="celula-card ${t.cls}" style="border-style:dashed;cursor:pointer;opacity:0.7;" onclick="window._novaCelula()">
           <div class="celula-type-label" style="color:${t.cor};">${t.label}</div>
-          <div style="font-size:12px;color:#666;margin-top:8px;line-height:1.5;">${t.desc}</div>
+          <div style="font-size:12px;color:#666;margin-top:8px;">${t.desc}</div>
           <div style="margin-top:14px;text-align:center;">
             <span style="font-size:11px;font-weight:700;color:${t.cor};padding:4px 12px;border-radius:20px;border:1px solid ${t.cor};">+ Constituir</span>
           </div>
         </div>`;
       return `
-        <div class="celula-card ${t.cls}">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="celula-card ${t.cls}" style="position:relative;">
+          <button class="btn-del-celula" data-id="${c.id}" data-nome="${c.nome_celula}"
+            title="Excluir célula"
+            style="position:absolute;top:8px;right:8px;width:28px;height:28px;border-radius:6px;
+              border:1px solid rgba(198,40,40,0.3);background:white;color:#c62828;font-size:13px;
+              cursor:pointer;display:flex;align-items:center;justify-content:center;">🗑️</button>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-right:30px;">
             <span class="celula-type-label" style="color:${t.cor};">${t.label}</span>
             <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:white;color:${t.cor};">${STATUS_CEL[c.status]||'—'}</span>
           </div>
@@ -422,14 +489,10 @@ function renderTriade(celulas = [], projetoId) {
             </div>
             ${c.total_quotas?`<div style="text-align:right;">
               <div class="field-label">Quotas</div>
-              <div style="font-size:13px;font-weight:700;color:#333;">${parseInt(c.total_quotas).toLocaleString('pt-BR')}</div>
+              <div style="font-size:13px;font-weight:700;">${parseInt(c.total_quotas).toLocaleString('pt-BR')}</div>
             </div>`:''}
           </div>
-          ${c.tipo===2&&c.regencia_supletiva?`
-            <div style="margin-top:8px;font-size:10px;color:#6A1B9A;font-weight:700;
-              background:rgba(106,27,154,0.08);padding:4px 8px;border-radius:6px;text-align:center;">
-              ★ Golden Share + Regência LSA
-            </div>`:''}
+          ${c.tipo===2&&c.regencia_supletiva?`<div style="margin-top:8px;font-size:10px;color:#6A1B9A;font-weight:700;background:rgba(106,27,154,0.08);padding:4px 8px;border-radius:6px;text-align:center;">★ Golden Share + Regência LSA</div>`:''}
         </div>`;
     }).join('')}
   </div>`;
@@ -449,7 +512,6 @@ function renderParticipantes(participantes = []) {
     </div>`).join('');
 }
 
-// ── FORM CÉLULA ───────────────────────────────────────────────
 function formCelulaHtml(participantes = []) {
   return `<form id="form-celula">
     <div style="display:flex;flex-direction:column;gap:14px;">
@@ -517,6 +579,7 @@ async function renderNovo(params, main) {
   const urlParams = new URLSearchParams(location.hash.split('?')[1]||'');
   const pessoaId  = urlParams.get('pessoa');
   setTopbar('Novo Projeto', 'Projetos');
+  const ano = new Date().getFullYear();
 
   main.innerHTML = `
     <div class="card" style="max-width:600px;">
@@ -526,7 +589,7 @@ async function renderNovo(params, main) {
           <div class="form-group">
             <label class="form-label required">Nome da Família</label>
             <input class="form-input" name="nome_familia" placeholder="Ex: Silva" />
-            <div class="form-hint">Código gerado automaticamente: PRJ-${new Date().getFullYear()}-001</div>
+            <div class="form-hint">Código gerado automaticamente: PRJ-${ano}-XXX</div>
           </div>
           <div class="form-group">
             <label class="form-label">Nome Personalizado do Projeto</label>
@@ -551,13 +614,13 @@ async function renderNovo(params, main) {
           <button class="btn btn-ghost" onclick="history.back()">Cancelar</button>
           <button class="btn btn-primary" id="btn-criar">🚀 Criar Projeto + Gerar Timeline</button>
         </div>
-        <div style="margin-top:16px;padding:12px 16px;background:#f0f4fb;border-radius:8px;font-size:12px;color:#1565C0;line-height:1.6;">
+        <div style="margin-top:16px;padding:12px 16px;background:#f0f4fb;border-radius:8px;font-size:12px;color:#1565C0;line-height:1.8;">
           <strong>O que será criado automaticamente:</strong><br>
-          ✅ Código único do projeto (PRJ-${new Date().getFullYear()}-XXX)<br>
-          ✅ Fase 1 — DESTINO com 10 passos (Planejamento Sucessório)<br>
-          ✅ Fase 2 — COFRE com 7 passos (Planejamento Patrimonial)<br>
-          ✅ Fase 3 — VEÍCULO com 7 passos (Planejamento Tributário)<br>
-          ✅ Cada passo com campos de comprovação específicos
+          ✅ Código único (PRJ-${ano}-XXX)<br>
+          ✅ Fase 1 — DESTINO · 10 passos com comprovação<br>
+          ✅ Fase 2 — COFRE · 7 passos com comprovação<br>
+          ✅ Fase 3 — VEÍCULO · 7 passos com comprovação<br>
+          📋 Total: 24 passos rastreáveis com evidências
         </div>
       </div>
     </div>`;
